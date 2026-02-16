@@ -1,0 +1,24 @@
+# ================= Core Backend =================
+Flask==3.0.0
+Flask-Cors==4.0.0
+PyJWT==2.8.0
+
+# ================= Database =================
+sqlite-utils==3.36
+
+# ================= Video & Media Processing =================
+moviepy==1.0.3
+numpy==1.26.4
+Pillow==10.2.0
+
+# ================= Text-to-Speech =================
+gTTS==2.5.1
+pyttsx3==2.90
+
+# ================= Language & RTL Support =================
+arabic-reshaper==3.0.0
+python-bidi==0.4.2
+
+# ================= Utilities =================
+requests==2.31.0
+python-dotenv==1.0.1

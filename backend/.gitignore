@@ -1,0 +1,23 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+
+# Environment
+.env
+
+# Generated media
+audio/
+videos/
+animated_videos/
+backgrounds/
+
+# Node
+node_modules/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Executables
+*.exe
