@@ -110,6 +110,7 @@ def init_db():
         tool TEXT,
         video_id TEXT,
         file_path TEXT,
+        audio_data BLOB,
         created_at TEXT DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY(user_id) REFERENCES users(id)
     )
@@ -133,6 +134,10 @@ def init_db():
         pass
     try:
         c.execute("ALTER TABLE users ADD COLUMN mobile TEXT")
+    except:
+        pass
+    try:
+        c.execute("ALTER TABLE user_videos ADD COLUMN audio_data BLOB")
     except:
         pass
 
@@ -701,13 +706,21 @@ def get_voices():
     if request.method == "OPTIONS":
         return "", 200
     try:
-        voices = list_edge_voices()
-        return jsonify([{
-            "name": v["Name"],
-            "shortName": v.get("ShortName"),
-            "gender": v.get("Gender"),
-            "locale": v.get("Locale")
-        } for v in voices])
+        from voiceover.app import URDU_PROFILES
+        urdu_profiles = [{"name": k, "type": "urdu"} for k in URDU_PROFILES.keys()]
+        # Hardcoded 9 cinematic English voices — Edge-TTS API call ki zaroorat nahi
+        edge_list = [
+            {"name": "en-US-DavisNeural",       "shortName": "US - Davis (Deep Narrator)",   "gender": "Male",   "locale": "en-US", "type": "edge"},
+            {"name": "en-US-GuyNeural",         "shortName": "US - Guy (Storyteller)",        "gender": "Male",   "locale": "en-US", "type": "edge"},
+            {"name": "en-US-TonyNeural",        "shortName": "US - Tony (Documentary)",       "gender": "Male",   "locale": "en-US", "type": "edge"},
+            {"name": "en-GB-RyanNeural",        "shortName": "UK - Ryan (British Narrator)",  "gender": "Male",   "locale": "en-GB", "type": "edge"},
+            {"name": "en-US-ChristopherNeural", "shortName": "US - Christopher (Calm)",       "gender": "Male",   "locale": "en-US", "type": "edge"},
+            {"name": "en-US-JennyNeural",       "shortName": "US - Jenny (Warm Narrator)",    "gender": "Female", "locale": "en-US", "type": "edge"},
+            {"name": "en-US-AriaNeural",        "shortName": "US - Aria (Clear & Smooth)",    "gender": "Female", "locale": "en-US", "type": "edge"},
+            {"name": "en-US-SaraNeural",        "shortName": "US - Sara (Professional)",      "gender": "Female", "locale": "en-US", "type": "edge"},
+            {"name": "en-GB-SoniaNeural",       "shortName": "UK - Sonia (British Narrator)", "gender": "Female", "locale": "en-GB", "type": "edge"},
+        ]
+        return jsonify({"urdu_profiles": urdu_profiles, "edge_voices": edge_list})
     except Exception as e:
         print(f"❌ Error fetching voices: {e}")
         return jsonify({"error": "Failed to fetch voices"}), 500
@@ -805,17 +818,33 @@ def serve_voiceover_audio(user_id, audio_id):
     if request.method == "OPTIONS":
         return "", 200
     try:
-        audio_path = os.path.join(VIDEO_DIRS["tool1"], user_id, f"{audio_id}.mp3")
-        if os.path.exists(audio_path):
-            return send_file(audio_path, mimetype="audio/mpeg")
-        elif audio_id in tool1_progress:
-            return jsonify({"error": "Audio generation in progress"}), 404
-        else:
-            return jsonify({"error": "File not found"}), 404
-    except Exception as e:
-        print(f"❌ Error serving audio: {e}")
-        return jsonify({"error": "Failed to serve audio"}), 500
+        import mysql.connector
+        mysql_conn = mysql.connector.connect(
+            host=MYSQL_HOST,
+            user=MYSQL_USER,
+            password=MYSQL_PASSWORD,
+            database=MYSQL_DATABASE
+        )
+        mysql_cur = mysql_conn.cursor()
+        mysql_cur.execute(
+            "SELECT audio_data FROM user_videos WHERE user_id=%s AND video_id=%s AND tool='tool1'",
+            (user_id, audio_id)
+        )
+        row = mysql_cur.fetchone()
+        mysql_cur.close()
+        mysql_conn.close()
 
+        if row and row[0]:
+            from io import BytesIO
+            return Response(
+                BytesIO(row[0]).read(),
+                mimetype="audio/mpeg",
+                headers={"Content-Disposition": f"inline; filename={audio_id}.mp3"}
+            )
+        return jsonify({"error": "Audio not found"}), 404
+    except Exception as e:
+        print(f"❌ Error serving voiceover: {e}")
+        return jsonify({"error": "Failed to serve audio"}), 500
 @app.route("/download/voiceover/<audio_id>/<user_id>", methods=["GET", "OPTIONS"])
 @token_required
 def download_voiceover(user_id, audio_id):
@@ -1167,16 +1196,21 @@ def migrate_sqlite_to_mysql():
             tool1_videos INT, tool2_videos INT, tool3_videos INT, price FLOAT)""")
         mysql_cur.execute("""CREATE TABLE IF NOT EXISTS user_videos (
             id INT AUTO_INCREMENT PRIMARY KEY, user_id VARCHAR(100),
-            tool TEXT, video_id TEXT, file_path TEXT, created_at TEXT)""")
+            tool TEXT, video_id TEXT, file_path TEXT, audio_data LONGBLOB, created_at TEXT)""")
+        # Add audio_data column if table already exists (for existing MySQL DBs)
+        try:
+            mysql_cur.execute("ALTER TABLE user_videos ADD COLUMN audio_data LONGBLOB")
+        except:
+            pass
         sqlite_cur.execute("SELECT id, email, password, plan, role, suspend, created_at FROM users")
         for row in sqlite_cur.fetchall():
             mysql_cur.execute("INSERT IGNORE INTO users (id,email,password,plan,role,suspend,created_at) VALUES (%s,%s,%s,%s,%s,%s,%s)", row)
         sqlite_cur.execute("SELECT name, tool1_videos, tool2_videos, tool3_videos, price FROM plans")
         for row in sqlite_cur.fetchall():
             mysql_cur.execute("INSERT IGNORE INTO plans (name,tool1_videos,tool2_videos,tool3_videos,price) VALUES (%s,%s,%s,%s,%s)", row)
-        sqlite_cur.execute("SELECT user_id, tool, video_id, file_path, created_at FROM user_videos")
+        sqlite_cur.execute("SELECT user_id, tool, video_id, file_path, audio_data, created_at FROM user_videos")
         for row in sqlite_cur.fetchall():
-            mysql_cur.execute("INSERT IGNORE INTO user_videos (user_id,tool,video_id,file_path,created_at) VALUES (%s,%s,%s,%s,%s)", row)
+            mysql_cur.execute("INSERT IGNORE INTO user_videos (user_id,tool,video_id,file_path,audio_data,created_at) VALUES (%s,%s,%s,%s,%s,%s)", row)
         mysql_conn.commit()
         sqlite_conn.close()
         mysql_conn.close()
