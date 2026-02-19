@@ -58,7 +58,7 @@ export default function Header() {
           </Link>
 
           <Link
-            href="/signup"
+            href="/login"
             className="hidden sm:inline-flex px-5 py-2 rounded-full 
             text-black bg-[#22B2C1]
             hover:shadow-[0_0_25px_#22B2C1]
@@ -99,7 +99,7 @@ export default function Header() {
             <div className="border-t border-white/10 pt-4 space-y-3">
 
               <Link
-                href="/login"
+                href="/signup"
                 onClick={() => setOpen(false)}
                 className="block"
               >

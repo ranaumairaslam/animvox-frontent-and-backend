@@ -757,14 +757,20 @@ def generate_video_async(video_id, scenes, settings):
 
         # Locate scene images
         scene_images = []
-        for i in range(len(scenes)):
-            found = None
+        for i, scene in enumerate(scenes):
+            # Use pre-saved image_path from scene dict (set by main.py route)
+            found = scene.get('image_path') if isinstance(scene, dict) else None
+            if found and os.path.exists(found):
+                scene_images.append(found)
+                continue
+            # Fallback: check UPLOADS_DIR by number
+            fallback = None
             for ext in ('jpg', 'jpeg', 'png', 'webp'):
                 p = os.path.join(UPLOADS_DIR, f"{i+1}.{ext}")
                 if os.path.exists(p):
-                    found = p
+                    fallback = p
                     break
-            scene_images.append(found)
+            scene_images.append(fallback)
 
         # --- Process each scene ---
         for i, scene in enumerate(scenes):

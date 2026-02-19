@@ -14,12 +14,12 @@ export default function Dashboard() {
   const router = useRouter();
 
   const handleLogout = () => {
-    try {
-      localStorage.removeItem("isLoggedIn");
-      localStorage.removeItem("role");
-    } catch {}
-    router.push("/login");
-  };
+  localStorage.removeItem("token");
+  localStorage.removeItem("user_id");
+  localStorage.removeItem("isLoggedIn");
+  localStorage.removeItem("role");
+  router.push("/login");
+};
 
   const cards = [
     {

@@ -119,7 +119,7 @@ export default function CTABanner() {
             <div className="flex flex-wrap gap-5">
               {/* Primary Button */}
               <Link
-                href="/signup"
+                href="/login"
                 className="group px-8 py-4 rounded-full bg-[#22B2C1] text-black font-bold text-xs uppercase tracking-widest flex items-center gap-3 hover:shadow-[0_0_40px_rgba(34,178,193,0.5)] transition-all active:scale-95"
               >
                 Get Started Free
