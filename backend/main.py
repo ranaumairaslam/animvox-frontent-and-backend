@@ -1086,11 +1086,34 @@ def generate_animated_video(user_id):
     story = {"scenes": scenes, "voice": voice, "language": language}
 
     tool3_progress[video_id] = 0
+    out_path = os.path.join(user_video_dir, f"{video_id}.mp4")
+
+    # Wrapper: generate then store BLOB in DB, delete from disk
+    def generate_and_store_animated(s, vid_id, o_path, u_id):
+        tool3_generate(s, vid_id, o_path)
+        if os.path.exists(o_path):
+            try:
+                with open(o_path, "rb") as fv:
+                    video_bytes = fv.read()
+                conn2 = get_db()
+                c2 = conn2.cursor()
+                c2.execute(
+                    "UPDATE user_videos SET audio_data=? WHERE user_id=? AND video_id=?",
+                    (video_bytes, u_id, vid_id)
+                )
+                conn2.commit()
+                conn2.close()
+                os.remove(o_path)
+                print(f"✅ Animated video {vid_id} stored in DB and removed from disk")
+            except Exception as db_err:
+                print(f"❌ DB store error for animated video {vid_id}: {db_err}")
+        else:
+            print(f"❌ Animated video file not found: {o_path}")
 
     print(f"📥 Queuing animated video task: {video_id}")
     task_queue.put((
-        tool3_generate,
-        (story, video_id, os.path.join(user_video_dir, f"{video_id}.mp4"))
+        generate_and_store_animated,
+        (story, video_id, out_path, user_id)
     ))
     print(f"✅ Animated video task queued: {video_id} (Queue size: {get_queue_size()})")
 
@@ -1116,11 +1139,34 @@ def download_animated_video(video_id, user_id):
             except Exception:
                 return jsonify({"error": "Invalid token"}), 401
 
+        # ── 1) DB se serve karo (BLOB) ──
+        conn = get_db()
+        c = conn.cursor()
+        c.execute(
+            "SELECT audio_data FROM user_videos WHERE video_id=? AND user_id=? AND tool='tool3'",
+            (video_id, user_id)
+        )
+        row = c.fetchone()
+        conn.close()
+
+        if row and row[0]:
+            video_bytes = bytes(row[0])
+            return Response(
+                video_bytes,
+                mimetype="video/mp4",
+                headers={
+                    "Content-Disposition": f"attachment; filename=animated_{video_id}.mp4",
+                    "Content-Length": str(len(video_bytes)),
+                }
+            )
+
+        # ── 2) Fallback: disk ──
         from videos_animated.app import VIDEOS_DIR
         path = os.path.join(VIDEOS_DIR, user_id, f"{video_id}.mp4")
         if os.path.exists(path):
             return send_file(path, mimetype="video/mp4", as_attachment=True,
                              download_name=f"animated_{video_id}.mp4")
+
         return jsonify({"error": "Video not ready"}), 404
     except Exception as e:
         print(f"❌ Error downloading animated video: {e}")
@@ -1131,6 +1177,19 @@ def serve_animated_video(user_id, video_id):
     if request.method == "OPTIONS":
         return "", 200
     try:
+        # ── DB se serve karo ──
+        conn = get_db()
+        c = conn.cursor()
+        c.execute(
+            "SELECT audio_data FROM user_videos WHERE video_id=? AND user_id=? AND tool='tool3'",
+            (video_id, user_id)
+        )
+        row = c.fetchone()
+        conn.close()
+        if row and row[0]:
+            return Response(bytes(row[0]), mimetype="video/mp4",
+                            headers={"Content-Disposition": "inline"})
+        # ── Fallback: disk ──
         video_path = os.path.join(VIDEO_DIRS["tool3"], user_id, f"{video_id}.mp4")
         if os.path.exists(video_path):
             return send_file(video_path, mimetype="video/mp4")
