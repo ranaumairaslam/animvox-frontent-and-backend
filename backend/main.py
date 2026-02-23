@@ -1,38 +1,25 @@
 import os
+import csv
 import uuid
-from datetime import datetime
-from flask import Flask, request, jsonify, send_file, send_from_directory, make_response
-from flask import Response
-from flask_cors import CORS, cross_origin
-import jwt
-from functools import wraps
-import threading
-from threading import Thread
-from task_queue import task_queue, start_workers, get_queue_size
-from io import BytesIO
-
 import json
 import sqlite3
-from werkzeug.security import generate_password_hash, check_password_hash
+import threading
+import mysql.connector
+import shutil
+import psutil
+
 from datetime import datetime, timedelta
-from shared_helpers import get_conn
+from functools import wraps
+from io import BytesIO
 
-# ================== LOAD .ENV SECRETS ==================
+import jwt
+from flask import Flask, request, jsonify, send_file, send_from_directory, make_response, Response
+from flask_cors import CORS
+from werkzeug.security import generate_password_hash, check_password_hash
 from dotenv import load_dotenv
-load_dotenv()
 
-SECRET_KEY = os.getenv("SECRET_KEY")
-ADMINS = {os.getenv("ADMIN_EMAIL"): os.getenv("ADMIN_PASSWORD")}
-DB_FILE = os.getenv("DB_FILE", "main.db")
-MYSQL_HOST = os.getenv("MYSQL_HOST", "localhost")
-MYSQL_USER = os.getenv("MYSQL_USER", "root")
-MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", "")
-MYSQL_DATABASE = os.getenv("MYSQL_DATABASE", "animvox_mysql")
-
-# ---- Shared helpers ----
-from shared_helpers import add_video_for_user, get_user_videos, delete_old_videos, VIDEO_DIRS
-
-# ---- Tool functions ----
+from task_queue import task_queue, start_workers, get_queue_size
+from shared_helpers import get_conn, add_video_for_user, get_user_videos, delete_old_videos, VIDEO_DIRS
 from voiceover.app import (
     generate_tts_async as tool1_generate,
     progress_status as tool1_progress,
@@ -43,19 +30,35 @@ from voiceover.app import (
 from videos_static.app import generate_video_async as tool2_generate, progress_status as tool2_progress
 from videos_animated.app import generate_story_video as tool3_generate, progress_status as tool3_progress
 
-# ---- Config ----
+# ================== LOAD .ENV SECRETS ==================
+load_dotenv()
+
+SECRET_KEY = os.getenv("SECRET_KEY")
+ADMINS = {os.getenv("ADMIN_EMAIL"): os.getenv("ADMIN_PASSWORD")}
+DB_FILE = os.getenv("DB_FILE", "main.db")
+MYSQL_HOST = os.getenv("MYSQL_HOST", "localhost")
+MYSQL_USER = os.getenv("MYSQL_USER", "root")
+MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", "")
+MYSQL_DATABASE = os.getenv("MYSQL_DATABASE", "animvox_mysql")
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "database.db")
 
+VOICE_MAP = {
+    "male":     "en-US-DavisNeural",
+    "female":   "en-US-JennyNeural",
+    "narrator": "en-US-GuyNeural",
+    "ur_male":  "ur-PK-AsadNeural",
+    "ur_female":"ur-PK-UzmaNeural",
+}
+
 app = Flask(__name__)
 
-# ✅ START WORKER THREADS FOR TASK QUEUE
 print("=" * 60)
 print("🚀 INITIALIZING ANIMVOX API SERVER")
 print("=" * 60)
 start_workers(num_workers=3)
 
-# ================== CORS — ALL ORIGINS ALLOWED ==================
 ALLOWED_ORIGINS = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
@@ -73,20 +76,32 @@ CORS(
     methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
 )
 
-# -------------------- ROOT ROUTE --------------------
-@app.route('/')
-def home():
-    queue_size = get_queue_size()
-    return jsonify({
-        "message": "Welcome to AnimVox API!",
-        "queue_size": queue_size,
-        "status": "running"
-    })
+# ================== HELPERS ==================
+
+def get_db():
+    return sqlite3.connect(DB_FILE)
+
+def encode_token(payload):
+    token = jwt.encode(payload, SECRET_KEY, algorithm="HS256")
+    return token.decode("utf-8") if isinstance(token, bytes) else token
+
+def int_rate_to_percent(raw_rate):
+    try:
+        diff = int(float(raw_rate)) - 100
+        return f"+{diff}%" if diff >= 0 else f"{diff}%"
+    except Exception:
+        return "-5%"
+
+def get_mysql_conn():
+    return mysql.connector.connect(
+        host=MYSQL_HOST, user=MYSQL_USER,
+        password=MYSQL_PASSWORD, database=MYSQL_DATABASE
+    )
 
 # ================= INIT DB =================
 def init_db():
     first_time = not os.path.exists(DB_FILE)
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_db()
     c = conn.cursor()
 
     c.execute("""
@@ -127,27 +142,20 @@ def init_db():
     )
     """)
 
-    # Add name/mobile columns if upgrading old DB
-    try:
-        c.execute("ALTER TABLE users ADD COLUMN name TEXT")
-    except:
-        pass
-    try:
-        c.execute("ALTER TABLE users ADD COLUMN mobile TEXT")
-    except:
-        pass
-    try:
-        c.execute("ALTER TABLE user_videos ADD COLUMN audio_data BLOB")
-    except:
-        pass
+    # Add columns if upgrading old DB
+    for alter_sql in [
+        "ALTER TABLE users ADD COLUMN name TEXT",
+        "ALTER TABLE users ADD COLUMN mobile TEXT",
+        "ALTER TABLE user_videos ADD COLUMN audio_data BLOB",
+    ]:
+        try:
+            c.execute(alter_sql)
+        except Exception:
+            pass
 
     conn.commit()
     conn.close()
-
-    if first_time:
-        print("✅ Database created and initialized.")
-    else:
-        print("✅ Database exists. Checked tables.")
+    print("✅ Database created and initialized." if first_time else "✅ Database exists. Checked tables.")
 
 init_db()
 
@@ -164,7 +172,7 @@ def admin_token_required(f):
             data = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
             if data.get("role") != "admin":
                 return jsonify({"error": "Admin access required"}), 403
-        except Exception as e:
+        except Exception:
             return jsonify({"error": "Invalid token"}), 401
         return f(*args, **kwargs)
     return decorated
@@ -182,21 +190,21 @@ def token_required(f):
             user_id = data.get("user_id")
             if not user_id:
                 return jsonify({"error": "Invalid token"}), 401
-            conn = sqlite3.connect(DB_FILE)
+            conn = get_db()
             c = conn.cursor()
             c.execute("SELECT suspend FROM users WHERE id=?", (user_id,))
             row = c.fetchone()
             conn.close()
             if row and row[0] == 1:
                 return jsonify({"error": "Account suspended"}), 403
-        except Exception as e:
+        except Exception:
             return jsonify({"error": "Invalid token"}), 401
         return f(user_id=user_id, *args, **kwargs)
     return decorated
 
 # ================= PLAN LIMITS =================
 def check_plan_limit(user_id, tool):
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_db()
     c = conn.cursor()
 
     c.execute("SELECT plan FROM users WHERE id=?", (user_id,))
@@ -204,10 +212,8 @@ def check_plan_limit(user_id, tool):
     plan_name = row[0] if row else "free"
 
     if plan_name == "free":
-        free_limits = {"tool1": 1, "tool2": 1, "tool3": 1}
-        max_allowed = free_limits.get(tool, 0)
         conn.close()
-        return True, max_allowed
+        return True, {"tool1": 1, "tool2": 1, "tool3": 1}.get(tool, 0)
 
     c.execute(
         "SELECT tool1_videos, tool2_videos, tool3_videos FROM plans WHERE name=?",
@@ -215,10 +221,7 @@ def check_plan_limit(user_id, tool):
     )
     plan_row = c.fetchone()
 
-    c.execute(
-        "SELECT COUNT(*) FROM user_videos WHERE user_id=? AND tool=?",
-        (user_id, tool)
-    )
+    c.execute("SELECT COUNT(*) FROM user_videos WHERE user_id=? AND tool=?", (user_id, tool))
     used_count = c.fetchone()[0]
     conn.close()
 
@@ -229,6 +232,15 @@ def check_plan_limit(user_id, tool):
         max_allowed = 0
 
     return (used_count < max_allowed), max_allowed
+
+# ================== ROOT ROUTE ==================
+@app.route('/')
+def home():
+    return jsonify({
+        "message": "Welcome to AnimVox API!",
+        "queue_size": get_queue_size(),
+        "status": "running"
+    })
 
 # ================= AUTH ROUTES =================
 @app.route("/login", methods=["POST", "OPTIONS"])
@@ -242,16 +254,14 @@ def login():
     if not email or not password:
         return jsonify({"error": "Missing credentials"}), 400
 
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_db()
     c = conn.cursor()
     c.execute("SELECT id, password, role FROM users WHERE email=?", (email,))
     row = c.fetchone()
     conn.close()
 
     if row and check_password_hash(row[1], password):
-        token = jwt.encode({"user_id": row[0]}, SECRET_KEY, algorithm="HS256")
-        if isinstance(token, bytes):
-            token = token.decode("utf-8")
+        token = encode_token({"user_id": row[0]})
         return jsonify({"user_id": row[0], "token": token, "role": row[2]})
 
     return jsonify({"error": "Invalid credentials"}), 401
@@ -268,30 +278,22 @@ def signup():
     if not email or not password:
         return jsonify({"error": "Missing credentials"}), 400
 
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_db()
     c = conn.cursor()
-
     c.execute("SELECT id FROM users WHERE email=?", (email,))
     if c.fetchone():
         conn.close()
         return jsonify({"error": "User already exists"}), 400
 
     user_id = str(uuid.uuid4())
-    hashed_password = generate_password_hash(password)
-
-    c.execute("""
-        INSERT INTO users (id, email, password, name, plan, role, created_at)
-        VALUES (?, ?, ?, ?, 'free', 'user', ?)
-    """, (user_id, email, hashed_password, username, datetime.utcnow().isoformat()))
-
+    c.execute(
+        "INSERT INTO users (id, email, password, name, plan, role, created_at) VALUES (?, ?, ?, ?, 'free', 'user', ?)",
+        (user_id, email, generate_password_hash(password), username, datetime.utcnow().isoformat())
+    )
     conn.commit()
     conn.close()
 
-    token = jwt.encode({"user_id": user_id}, SECRET_KEY, algorithm="HS256")
-    if isinstance(token, bytes):
-        token = token.decode("utf-8")
-
-    return jsonify({"user_id": user_id, "token": token, "role": "user"})
+    return jsonify({"user_id": user_id, "token": encode_token({"user_id": user_id}), "role": "user"})
 
 # ================= USER PROFILE ROUTES =================
 @app.route("/user/profile", methods=["GET", "OPTIONS"])
@@ -300,23 +302,15 @@ def get_user_profile(user_id):
     if request.method == "OPTIONS":
         return '', 200
     try:
-        conn = sqlite3.connect(DB_FILE)
+        conn = get_db()
         c = conn.cursor()
-        c.execute("""
-            SELECT email, name, mobile, plan, role, created_at, suspend
-            FROM users WHERE id=?
-        """, (user_id,))
+        c.execute("SELECT email, name, mobile, plan, role, created_at, suspend FROM users WHERE id=?", (user_id,))
         row = c.fetchone()
         if not row:
             return jsonify({"error": "User not found"}), 404
         return jsonify({
-            "email": row[0],
-            "name": row[1] or "",
-            "mobile": row[2] or "",
-            "plan": row[3],
-            "role": row[4],
-            "created_at": row[5],
-            "suspend": bool(row[6])
+            "email": row[0], "name": row[1] or "", "mobile": row[2] or "",
+            "plan": row[3], "role": row[4], "created_at": row[5], "suspend": bool(row[6])
         })
     except Exception as e:
         print("❌ Profile fetch error:", e)
@@ -330,12 +324,9 @@ def update_user_profile(user_id):
     if request.method == "OPTIONS":
         return '', 200
     data = request.json or {}
-    name = data.get("name", "")
-    mobile = data.get("mobile", "")
-
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_db()
     c = conn.cursor()
-    c.execute("UPDATE users SET name=?, mobile=? WHERE id=?", (name, mobile, user_id))
+    c.execute("UPDATE users SET name=?, mobile=? WHERE id=?", (data.get("name", ""), data.get("mobile", ""), user_id))
     conn.commit()
     conn.close()
     return jsonify({"message": "Profile updated successfully"})
@@ -346,8 +337,7 @@ def get_user_videos_route(user_id):
     if request.method == "OPTIONS":
         return '', 200
     try:
-        videos = get_user_videos(user_id)
-        return jsonify(videos)
+        return jsonify(get_user_videos(user_id))
     except Exception as e:
         print("❌ Error fetching videos:", e)
         return jsonify({"error": "Failed to fetch videos"}), 500
@@ -358,10 +348,9 @@ def delete_user_video(user_id, video_id):
     if request.method == "OPTIONS":
         return '', 200
     try:
-        conn = sqlite3.connect(DB_FILE)
+        conn = get_db()
         c = conn.cursor()
-        c.execute("SELECT tool, file_path FROM user_videos WHERE user_id=? AND video_id=?",
-                  (user_id, video_id))
+        c.execute("SELECT tool, file_path FROM user_videos WHERE user_id=? AND video_id=?", (user_id, video_id))
         row = c.fetchone()
         if not row:
             conn.close()
@@ -388,12 +377,7 @@ def admin_login():
     email = data.get("email")
     password = data.get("password")
     if ADMINS.get(email) == password:
-        token = jwt.encode(
-            {"admin_email": email, "role": "admin", "exp": datetime.utcnow() + timedelta(days=1)},
-            SECRET_KEY, algorithm="HS256"
-        )
-        if isinstance(token, bytes):
-            token = token.decode("utf-8")
+        token = encode_token({"admin_email": email, "role": "admin", "exp": datetime.utcnow() + timedelta(days=1)})
         return jsonify({"token": token})
     return jsonify({"error": "Invalid admin credentials"}), 401
 
@@ -403,25 +387,17 @@ def admin_fetch_users():
     if request.method == "OPTIONS":
         return '', 200
     try:
-        conn = sqlite3.connect(DB_FILE)
+        conn = get_db()
         c = conn.cursor()
         c.execute("SELECT id, email, name, mobile, plan, role, created_at, suspend FROM users")
         rows = c.fetchall()
         users = []
         for row in rows:
-            user_id = row[0]
-            c.execute("SELECT COUNT(*) FROM user_videos WHERE user_id=?", (user_id,))
-            total_videos = c.fetchone()[0]
+            c.execute("SELECT COUNT(*) FROM user_videos WHERE user_id=?", (row[0],))
             users.append({
-                "id": user_id,
-                "email": row[1],
-                "name": row[2] or "",
-                "mobile": row[3] or "",
-                "plan": row[4],
-                "role": row[5],
-                "created_at": row[6],
-                "suspend": bool(row[7]),
-                "total_videos": total_videos
+                "id": row[0], "email": row[1], "name": row[2] or "", "mobile": row[3] or "",
+                "plan": row[4], "role": row[5], "created_at": row[6],
+                "suspend": bool(row[7]), "total_videos": c.fetchone()[0]
             })
         return jsonify(users)
     except Exception as e:
@@ -447,7 +423,7 @@ def admin_update_user(user_id):
         if not fields:
             return jsonify({"error": "No fields to update"}), 400
         values.append(user_id)
-        conn = sqlite3.connect(DB_FILE)
+        conn = get_db()
         c = conn.cursor()
         c.execute(f"UPDATE users SET {', '.join(fields)} WHERE id=?", values)
         conn.commit()
@@ -464,7 +440,7 @@ def admin_fetch_plans():
     if request.method == "OPTIONS":
         return '', 200
     try:
-        conn = sqlite3.connect(DB_FILE)
+        conn = get_db()
         c = conn.cursor()
         c.execute("SELECT id, name, tool1_videos, tool2_videos, tool3_videos, price FROM plans")
         plans = [{"id": r[0], "name": r[1], "tool1_videos": r[2], "tool2_videos": r[3],
@@ -485,12 +461,14 @@ def admin_create_plan():
     name = data.get("name")
     if not name:
         return jsonify({"error": "Plan name required"}), 400
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_db()
     c = conn.cursor()
     try:
-        c.execute("INSERT INTO plans (name, tool1_videos, tool2_videos, tool3_videos, price) VALUES (?,?,?,?,?)",
-                  (name, data.get("tool1_videos", 0), data.get("tool2_videos", 0),
-                   data.get("tool3_videos", 0), data.get("price", 0.0)))
+        c.execute(
+            "INSERT INTO plans (name, tool1_videos, tool2_videos, tool3_videos, price) VALUES (?,?,?,?,?)",
+            (name, data.get("tool1_videos", 0), data.get("tool2_videos", 0),
+             data.get("tool3_videos", 0), data.get("price", 0.0))
+        )
         conn.commit()
         return jsonify({"status": "success"})
     except sqlite3.IntegrityError:
@@ -512,7 +490,7 @@ def admin_update_plan(plan_id):
     if not fields:
         return jsonify({"error": "No fields to update"}), 400
     values.append(plan_id)
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_db()
     c = conn.cursor()
     c.execute(f"UPDATE plans SET {', '.join(fields)} WHERE id=?", values)
     conn.commit()
@@ -525,7 +503,7 @@ def admin_delete_plan(plan_id):
     if request.method == "OPTIONS":
         return '', 200
     try:
-        conn = sqlite3.connect(DB_FILE)
+        conn = get_db()
         c = conn.cursor()
         c.execute("UPDATE users SET plan='free' WHERE plan=(SELECT name FROM plans WHERE id=?)", (plan_id,))
         c.execute("DELETE FROM plans WHERE id=?", (plan_id,))
@@ -543,7 +521,7 @@ def admin_usage():
     if request.method == "OPTIONS":
         return '', 200
     try:
-        conn = sqlite3.connect(DB_FILE)
+        conn = get_db()
         c = conn.cursor()
         c.execute("""
             SELECT u.id, u.email,
@@ -570,10 +548,9 @@ def admin_reset_password(user_id):
         return '', 200
     try:
         new_password = str(uuid.uuid4())[:8]
-        hashed = generate_password_hash(new_password)
-        conn = sqlite3.connect(DB_FILE)
+        conn = get_db()
         c = conn.cursor()
-        c.execute("UPDATE users SET password=? WHERE id=?", (hashed, user_id))
+        c.execute("UPDATE users SET password=? WHERE id=?", (generate_password_hash(new_password), user_id))
         conn.commit()
         conn.close()
         return jsonify({"status": "success", "temp_password": new_password})
@@ -592,10 +569,12 @@ def admin_bulk_update_plan():
         new_plan = data.get("plan")
         if not user_ids or not new_plan:
             return jsonify({"error": "User IDs and plan required"}), 400
-        conn = sqlite3.connect(DB_FILE)
+        conn = get_db()
         c = conn.cursor()
-        c.execute(f"UPDATE users SET plan=? WHERE id IN ({','.join(['?']*len(user_ids))})",
-                  [new_plan] + user_ids)
+        c.execute(
+            f"UPDATE users SET plan=? WHERE id IN ({','.join(['?']*len(user_ids))})",
+            [new_plan] + user_ids
+        )
         conn.commit()
         conn.close()
         return jsonify({"status": "success", "updated_users": len(user_ids)})
@@ -609,7 +588,7 @@ def admin_fetch_videos():
     if request.method == "OPTIONS":
         return '', 200
     try:
-        conn = sqlite3.connect(DB_FILE)
+        conn = get_db()
         c = conn.cursor()
         c.execute("SELECT id, user_id, tool, video_id, file_path, created_at FROM user_videos")
         videos = [{"id": r[0], "user_id": r[1], "tool": r[2], "video_id": r[3],
@@ -626,7 +605,7 @@ def admin_delete_video(video_id):
     if request.method == "OPTIONS":
         return '', 200
     try:
-        conn = sqlite3.connect(DB_FILE)
+        conn = get_db()
         c = conn.cursor()
         c.execute("SELECT file_path FROM user_videos WHERE id=?", (video_id,))
         row = c.fetchone()
@@ -650,8 +629,7 @@ def admin_fetch_logs():
         if not os.path.exists(logs_file):
             return jsonify([])
         with open(logs_file, "r") as f:
-            logs = [line.strip() for line in f.readlines()]
-        return jsonify(logs)
+            return jsonify([line.strip() for line in f.readlines()])
     except Exception as e:
         return jsonify({"error": "Failed to fetch logs"}), 500
 
@@ -661,10 +639,8 @@ def admin_system_health():
     if request.method == "OPTIONS":
         return '', 200
     try:
-        import shutil, psutil
         total, used, free = shutil.disk_usage("/")
         memory = psutil.virtual_memory()
-        cpu_percent = psutil.cpu_percent()
         return jsonify({
             "disk_total_gb": total // (1024**3),
             "disk_used_gb": used // (1024**3),
@@ -672,7 +648,7 @@ def admin_system_health():
             "memory_total_mb": memory.total // (1024**2),
             "memory_used_mb": memory.used // (1024**2),
             "memory_free_mb": memory.available // (1024**2),
-            "cpu_percent": cpu_percent,
+            "cpu_percent": psutil.cpu_percent(),
             "queue_size": get_queue_size()
         })
     except Exception as e:
@@ -684,8 +660,7 @@ def admin_export_users_csv():
     if request.method == "OPTIONS":
         return '', 200
     try:
-        import csv
-        conn = sqlite3.connect(DB_FILE)
+        conn = get_db()
         c = conn.cursor()
         c.execute("SELECT id, email, plan, role, created_at, suspend FROM users")
         rows = c.fetchall()
@@ -708,7 +683,6 @@ def get_voices():
     try:
         from voiceover.app import URDU_PROFILES
         urdu_profiles = [{"name": k, "type": "urdu"} for k in URDU_PROFILES.keys()]
-        # Hardcoded 9 cinematic English voices — Edge-TTS API call ki zaroorat nahi
         edge_list = [
             {"name": "en-US-DavisNeural",       "shortName": "US - Davis (Deep Narrator)",   "gender": "Male",   "locale": "en-US", "type": "edge"},
             {"name": "en-US-GuyNeural",         "shortName": "US - Guy (Storyteller)",        "gender": "Male",   "locale": "en-US", "type": "edge"},
@@ -732,19 +706,20 @@ def generate_voiceover_sync():
     try:
         data = request.get_json()
         text = data.get("text")
-        language = data.get("language", "en")
-        voice = data.get("voice", "male")
-        rate = int(data.get("rate", 118))
-        speed = float(data.get("speed", 1.0))
-        volume = float(data.get("volume", 1.0))
-        pitch = float(data.get("pitch", 0))
-        user_id = data.get("user_id")
-
         if not text or not text.strip():
             return jsonify({"error": "Text is required"}), 400
 
+        user_id = data.get("user_id")
         audio_id = str(uuid.uuid4())
-        audio_io = generate_tts(text, language, voice, rate, speed, volume, pitch)
+        audio_io = generate_tts(
+            text,
+            data.get("language", "en"),
+            data.get("voice", "male"),
+            int(data.get("rate", 118)),
+            float(data.get("speed", 1.0)),
+            float(data.get("volume", 1.0)),
+            float(data.get("pitch", 0)),
+        )
         if audio_io is None:
             return jsonify({"error": "Failed to generate audio"}), 500
 
@@ -798,8 +773,7 @@ def generate_voiceover_async(user_id):
 def get_voiceover_progress(audio_id):
     if request.method == "OPTIONS":
         return "", 200
-    progress = tool1_progress.get(audio_id, 0)
-    return jsonify({"progress": progress})
+    return jsonify({"progress": tool1_progress.get(audio_id, 0)})
 
 @app.route("/public/voiceover/<user_id>", methods=["GET", "OPTIONS"])
 def list_user_voiceovers(user_id):
@@ -807,8 +781,7 @@ def list_user_voiceovers(user_id):
         return "", 200
     try:
         files = get_user_videos(user_id)
-        voiceover_files = [f for f in files if f.get("tool") == "tool1"]
-        return jsonify(voiceover_files)
+        return jsonify([f for f in files if f.get("tool") == "tool1"])
     except Exception as e:
         print(f"❌ Error listing voiceovers: {e}")
         return jsonify({"error": "Failed to fetch voiceovers"}), 500
@@ -818,13 +791,7 @@ def serve_voiceover_audio(user_id, audio_id):
     if request.method == "OPTIONS":
         return "", 200
     try:
-        import mysql.connector
-        mysql_conn = mysql.connector.connect(
-            host=MYSQL_HOST,
-            user=MYSQL_USER,
-            password=MYSQL_PASSWORD,
-            database=MYSQL_DATABASE
-        )
+        mysql_conn = get_mysql_conn()
         mysql_cur = mysql_conn.cursor()
         mysql_cur.execute(
             "SELECT audio_data FROM user_videos WHERE user_id=%s AND video_id=%s AND tool='tool1'",
@@ -835,7 +802,6 @@ def serve_voiceover_audio(user_id, audio_id):
         mysql_conn.close()
 
         if row and row[0]:
-            from io import BytesIO
             return Response(
                 BytesIO(row[0]).read(),
                 mimetype="audio/mpeg",
@@ -845,6 +811,7 @@ def serve_voiceover_audio(user_id, audio_id):
     except Exception as e:
         print(f"❌ Error serving voiceover: {e}")
         return jsonify({"error": "Failed to serve audio"}), 500
+
 @app.route("/download/voiceover/<audio_id>/<user_id>", methods=["GET", "OPTIONS"])
 @token_required
 def download_voiceover(user_id, audio_id):
@@ -898,41 +865,18 @@ def generate_static_video(user_id):
     os.makedirs(user_video_dir, exist_ok=True)
     progress_status[video_id] = 0
 
-    # Support both JSON and multipart/form-data
     if request.content_type and 'multipart' in request.content_type:
         from videos_static.app import UPLOADS_DIR
 
-        # ── Voice mapping: frontend sends "male"/"female"/"narrator" → Edge-TTS name ──
-        VOICE_MAP = {
-            "male":     "en-US-DavisNeural",
-            "female":   "en-US-JennyNeural",
-            "narrator": "en-US-GuyNeural",
-            "ur_male":  "ur-PK-AsadNeural",
-            "ur_female":"ur-PK-UzmaNeural",
-        }
-
-        # ── Rate conversion: frontend sends integer (e.g. 120) → Edge-TTS percent string ──
-        def int_rate_to_percent(raw_rate):
-            try:
-                r = int(float(raw_rate))
-                # 100 = normal speed → "+0%", 120 = faster → "+20%", 80 = slower → "-20%"
-                diff = r - 100
-                return f"+{diff}%" if diff >= 0 else f"{diff}%"
-            except Exception:
-                return "-5%"
-
-        # ── Parse scenes + save images to disk ──
+        # Parse scenes + save images to disk
         scenes_data = []
         idx = 0
         while True:
             dialogue = request.form.get(f"scenes[{idx}][dialogue]")
             if dialogue is None:
                 break
-            images = request.files.getlist(f"scenes[{idx}][images]")
-
-            # Save each uploaded image to UPLOADS_DIR as {scene_number}.{ext}
             saved_image_path = None
-            for img_file in images:
+            for img_file in request.files.getlist(f"scenes[{idx}][images]"):
                 if img_file and img_file.filename:
                     ext = img_file.filename.rsplit('.', 1)[-1].lower()
                     if ext not in ('jpg', 'jpeg', 'png', 'webp'):
@@ -941,8 +885,7 @@ def generate_static_video(user_id):
                     img_file.save(img_save_path)
                     saved_image_path = img_save_path
                     print(f"🖼️ Scene {idx+1} image saved: {img_save_path}")
-                    break  # one image per scene
-
+                    break
             scenes_data.append({"dialogue": dialogue, "image_path": saved_image_path})
             idx += 1
 
@@ -951,11 +894,10 @@ def generate_static_video(user_id):
 
         raw_voice = request.form.get('voice', 'male')
         raw_language = request.form.get('language', 'en')
-        # For Urdu, use Urdu Edge-TTS voices
         if raw_language == 'ur':
             edge_voice = VOICE_MAP.get(f"ur_{raw_voice}", VOICE_MAP.get(raw_voice, "ur-PK-AsadNeural"))
         else:
-            edge_voice = VOICE_MAP.get(raw_voice, raw_voice)  # if already Edge name, keep it
+            edge_voice = VOICE_MAP.get(raw_voice, raw_voice)
 
         settings = {
             'voice': edge_voice,
@@ -970,14 +912,34 @@ def generate_static_video(user_id):
         if not allowed:
             return jsonify({"error": f"Plan limit exceeded ({max_allowed} videos allowed)"}), 403
 
+        def generate_and_store_static(vid_id, sc_data, s_settings, u_id):
+            from videos_static.app import VIDEOS_DIR, progress_status as static_progress
+            generate_video_async(vid_id, sc_data, s_settings)
+            video_path = os.path.join(VIDEOS_DIR, f"{vid_id}.mp4")
+            if os.path.exists(video_path):
+                try:
+                    with open(video_path, "rb") as f:
+                        video_bytes = f.read()
+                    conn2 = get_db()
+                    c2 = conn2.cursor()
+                    c2.execute(
+                        "UPDATE user_videos SET audio_data=? WHERE user_id=? AND video_id=?",
+                        (video_bytes, u_id, vid_id)
+                    )
+                    conn2.commit()
+                    conn2.close()
+                    os.remove(video_path)
+                    print(f"✅ Video {vid_id} stored in DB and removed from disk")
+                except Exception as e:
+                    print(f"❌ DB store error for video {vid_id}: {e}")
+
         print(f"📥 Queuing static video task: {video_id}")
-        task_queue.put((generate_video_async, (video_id, scenes_data, settings)))
+        task_queue.put((generate_and_store_static, (video_id, scenes_data, settings, user_id)))
         print(f"✅ Static video task queued: {video_id}")
         add_video_for_user(user_id, "tool2", video_id, f"{video_id}.mp4")
         return jsonify({"video_id": video_id, "scenes_count": len(scenes_data)})
 
     else:
-        # JSON body
         data = request.get_json()
         script_text = data.get("script_text", "")
         if not script_text.strip():
@@ -1012,11 +974,32 @@ def download_static_video(video_id, user_id):
     if request.method == "OPTIONS":
         return "", 200
     try:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute(
+            "SELECT audio_data FROM user_videos WHERE video_id=? AND user_id=? AND tool='tool2'",
+            (video_id, user_id)
+        )
+        row = c.fetchone()
+        conn.close()
+
+        if row and row[0]:
+            video_bytes = row[0]
+            return Response(
+                video_bytes,
+                mimetype="video/mp4",
+                headers={
+                    "Content-Disposition": f"attachment; filename=static_{video_id}.mp4",
+                    "Content-Length": str(len(video_bytes)),
+                }
+            )
+
         from videos_static.app import VIDEOS_DIR
         path = os.path.join(VIDEOS_DIR, f"{video_id}.mp4")
         if os.path.exists(path):
             return send_file(path, mimetype="video/mp4", as_attachment=True,
                              download_name=f"static_{video_id}.mp4")
+
         return jsonify({"error": "Video not ready"}), 404
     except Exception as e:
         print(f"❌ Error downloading static video: {e}")
@@ -1066,7 +1049,6 @@ def generate_animated_video(user_id):
     os.makedirs(user_bg_dir, exist_ok=True)
     os.makedirs(user_video_dir, exist_ok=True)
 
-    # Parse scenes from multipart form
     scenes = []
     idx = 0
     while True:
@@ -1081,9 +1063,8 @@ def generate_animated_video(user_id):
             bg_file.save(bg_path)
             scene["background"] = bg_path
 
-        char_files = request.files.getlist(f"scenes[{idx}][characters]")
         char_paths = []
-        for cf in char_files:
+        for cf in request.files.getlist(f"scenes[{idx}][characters]"):
             path = os.path.join(user_bg_dir, f"{uuid.uuid4()}_{cf.filename}")
             cf.save(path)
             char_paths.append(path)
@@ -1093,18 +1074,15 @@ def generate_animated_video(user_id):
         idx += 1
 
     if not scenes:
-        # Try JSON fallback
         story_json = request.form.get("story")
         if story_json:
             try:
-                story = json.loads(story_json)
-                scenes = story.get("scenes", [])
-            except:
+                scenes = json.loads(story_json).get("scenes", [])
+            except Exception:
                 return jsonify({"error": "Invalid story data"}), 400
 
     voice = request.form.get("tts_voice", "female")
     language = request.form.get("tts_lang", "ur")
-
     story = {"scenes": scenes, "voice": voice, "language": language}
 
     tool3_progress[video_id] = 0
@@ -1117,7 +1095,6 @@ def generate_animated_video(user_id):
     print(f"✅ Animated video task queued: {video_id} (Queue size: {get_queue_size()})")
 
     add_video_for_user(user_id, "tool3", video_id, f"{video_id}.mp4")
-
     return jsonify({"video_id": video_id})
 
 @app.route("/progress/animated/<video_id>", methods=["GET", "OPTIONS"])
@@ -1132,13 +1109,11 @@ def download_animated_video(video_id, user_id):
     if request.method == "OPTIONS":
         return "", 200
     try:
-        token = request.headers.get("Authorization", "").replace("Bearer ", "")
-        if not token:
-            token = request.args.get("token", "")
+        token = request.headers.get("Authorization", "").replace("Bearer ", "") or request.args.get("token", "")
         if token:
             try:
                 jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
-            except:
+            except Exception:
                 return jsonify({"error": "Invalid token"}), 401
 
         from videos_animated.app import VIDEOS_DIR
@@ -1176,17 +1151,13 @@ def queue_status(user_id):
     })
 
 # ================= SQLITE → MYSQL MIGRATION =================
-import mysql.connector
-
 def migrate_sqlite_to_mysql():
     try:
         sqlite_conn = sqlite3.connect(DB_FILE)
         sqlite_cur = sqlite_conn.cursor()
-        mysql_conn = mysql.connector.connect(
-            host=MYSQL_HOST, user=MYSQL_USER,
-            password=MYSQL_PASSWORD, database=MYSQL_DATABASE
-        )
+        mysql_conn = get_mysql_conn()
         mysql_cur = mysql_conn.cursor()
+
         mysql_cur.execute("""CREATE TABLE IF NOT EXISTS users (
             id VARCHAR(100) PRIMARY KEY, email TEXT, password TEXT,
             name TEXT, mobile TEXT, plan TEXT, role TEXT,
@@ -1197,20 +1168,23 @@ def migrate_sqlite_to_mysql():
         mysql_cur.execute("""CREATE TABLE IF NOT EXISTS user_videos (
             id INT AUTO_INCREMENT PRIMARY KEY, user_id VARCHAR(100),
             tool TEXT, video_id TEXT, file_path TEXT, audio_data LONGBLOB, created_at TEXT)""")
-        # Add audio_data column if table already exists (for existing MySQL DBs)
         try:
             mysql_cur.execute("ALTER TABLE user_videos ADD COLUMN audio_data LONGBLOB")
-        except:
+        except Exception:
             pass
+
         sqlite_cur.execute("SELECT id, email, password, plan, role, suspend, created_at FROM users")
         for row in sqlite_cur.fetchall():
             mysql_cur.execute("INSERT IGNORE INTO users (id,email,password,plan,role,suspend,created_at) VALUES (%s,%s,%s,%s,%s,%s,%s)", row)
+
         sqlite_cur.execute("SELECT name, tool1_videos, tool2_videos, tool3_videos, price FROM plans")
         for row in sqlite_cur.fetchall():
             mysql_cur.execute("INSERT IGNORE INTO plans (name,tool1_videos,tool2_videos,tool3_videos,price) VALUES (%s,%s,%s,%s,%s)", row)
+
         sqlite_cur.execute("SELECT user_id, tool, video_id, file_path, audio_data, created_at FROM user_videos")
         for row in sqlite_cur.fetchall():
             mysql_cur.execute("INSERT IGNORE INTO user_videos (user_id,tool,video_id,file_path,audio_data,created_at) VALUES (%s,%s,%s,%s,%s,%s)", row)
+
         mysql_conn.commit()
         sqlite_conn.close()
         mysql_conn.close()
