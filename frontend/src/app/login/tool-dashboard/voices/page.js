@@ -1,37 +1,28 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import API from "@/lib/api";
 import { useRouter } from "next/navigation";
 import { Mic2, Volume2, Music, Settings, Play, Download } from "lucide-react";
-
-// Urdu voice profiles
-const URDU_PROFILES = [
-  "Narrator",
-  "Child (Boy)",
-  "Child (Girl)",
-  "Elder",
-  "Hero",
-  "Villain",
-  "Mother",
-  "Emotion",
-  "Neutral",
-  "Happy",
-  "Sad",
-  "Angry",
-];
-
-// English voice options (male/female for pyttsx3)
-const ENGLISH_PROFILES = [
-  "male",
-  "female",
-];
 
 export default function Voiceover() {
   const router = useRouter();
   const [text, setText] = useState("");
   const [language, setLanguage] = useState("ur");
-  const [voice, setVoice] = useState(URDU_PROFILES[0]);
+  const [voice, setVoice] = useState("");
+  const [urduProfiles, setUrduProfiles] = useState([]);
+  const [edgeVoices, setEdgeVoices] = useState([]);
+
+  useEffect(() => {
+    API.getVoices().then((res) => {
+      const urdu = res.data.urdu_profiles || [];
+      const edge = res.data.edge_voices || [];
+      setUrduProfiles(urdu);
+      setEdgeVoices(edge);
+      if (urdu.length > 0) setVoice(urdu[0].name);
+    }).catch(() => console.error("Voices load failed"));
+  }, []);
+
   const [rate, setRate] = useState(120);
   const [speed, setSpeed] = useState(1.0);
   const [volume, setVolume] = useState(1.0);
@@ -42,13 +33,12 @@ export default function Voiceover() {
   const [error, setError] = useState("");
   const audioRef = useRef(null);
 
-  // Jab language change ho, voice reset karo
   const handleLanguageChange = (newLang) => {
     setLanguage(newLang);
     if (newLang === "ur") {
-      setVoice(URDU_PROFILES[0]);
+      if (urduProfiles.length > 0) setVoice(urduProfiles[0].name);
     } else {
-      setVoice(ENGLISH_PROFILES[0]);
+      if (edgeVoices.length > 0) setVoice(edgeVoices[0].name);
     }
   };
 
@@ -80,7 +70,6 @@ export default function Voiceover() {
           const prog = await API.getAudioProgress(newAudioId);
           const progress = prog.data.progress;
 
-          // Error state handle karo (-1 matlab generation fail)
           if (progress === -1) {
             clearInterval(interval);
             setIsGenerating(false);
@@ -88,7 +77,6 @@ export default function Voiceover() {
             return;
           }
 
-          // Success state
           if (progress >= 100) {
             clearInterval(interval);
             setIsGenerating(false);
@@ -109,7 +97,6 @@ export default function Voiceover() {
 
     } catch (genErr) {
       setIsGenerating(false);
-      // Plan limit error handle karo
       if (genErr?.response?.status === 403) {
         setError(genErr.response.data?.error || "Plan limit reached.");
       } else {
@@ -118,20 +105,15 @@ export default function Voiceover() {
     }
   };
 
-  const currentProfiles = language === "ur" ? URDU_PROFILES : ENGLISH_PROFILES;
-
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 md:p-12 font-sans overflow-hidden relative">
-      {/* Animated background elements */}
       <div className="fixed inset-0 overflow-hidden pointer-events-none">
         <div className="absolute top-0 left-1/4 w-96 h-96 bg-cyan-500/10 rounded-full blur-3xl animate-pulse" />
         <div className="absolute bottom-0 right-1/4 w-96 h-96 bg-blue-500/10 rounded-full blur-3xl animate-pulse delay-1000" />
         <div className="absolute top-1/2 left-1/2 w-96 h-96 bg-purple-500/5 rounded-full blur-3xl animate-pulse delay-500" />
       </div>
 
-      {/* Content wrapper */}
       <div className="relative z-10">
-        {/* Back Button */}
         <a
           href="./"
           className="mb-8 inline-flex items-center gap-2 px-4 py-2 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 hover:border-cyan-400/50 text-blue-100 transition duration-300 backdrop-blur-sm group"
@@ -139,7 +121,6 @@ export default function Voiceover() {
           <span className="group-hover:-translate-x-1 transition duration-300">←</span> Back to Dashboard
         </a>
 
-        {/* Page Title Section */}
         <div className="mb-16">
           <div className="flex items-center gap-4 mb-6">
             <div className="p-4 rounded-2xl bg-gradient-to-br from-cyan-500/30 to-blue-600/30 border border-cyan-400/30 backdrop-blur-xl group hover:from-cyan-500/50 hover:to-blue-600/50 transition duration-300">
@@ -158,7 +139,6 @@ export default function Voiceover() {
           </div>
         </div>
 
-        {/* Text Input Section */}
         <div className="mb-10">
           <label className="text-xs font-bold mb-3 text-cyan-300/90 flex items-center gap-2 uppercase tracking-widest">
             <Music size={16} className="animate-pulse" /> Script Input
@@ -177,9 +157,7 @@ export default function Voiceover() {
           </div>
         </div>
 
-        {/* Voice Settings Cards */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-10">
-          {/* Left Column - Voice Selection */}
           <div className="group bg-gradient-to-br from-cyan-500/10 to-blue-600/10 border border-cyan-400/20 hover:border-cyan-400/50 rounded-3xl p-8 backdrop-blur-2xl transition duration-500 hover:shadow-2xl hover:shadow-cyan-500/20">
             <h3 className="text-lg font-bold mb-6 flex items-center gap-3 text-cyan-300 uppercase tracking-wide">
               <div className="p-2 rounded-lg bg-cyan-500/20">
@@ -188,7 +166,6 @@ export default function Voiceover() {
               Voice Settings
             </h3>
 
-            {/* Language */}
             <div className="mb-6">
               <label className="text-xs font-bold mb-3 text-cyan-200/80 block uppercase tracking-widest">
                 Language
@@ -203,7 +180,6 @@ export default function Voiceover() {
               </select>
             </div>
 
-            {/* Voice Profile */}
             <div>
               <label className="text-xs font-bold mb-3 text-cyan-200/80 block uppercase tracking-widest">
                 Voice Profile
@@ -213,16 +189,20 @@ export default function Voiceover() {
                 onChange={(e) => setVoice(e.target.value)}
                 className="w-full rounded-xl bg-white/5 border-2 border-cyan-400/20 hover:border-cyan-400/40 p-4 text-white text-sm font-medium focus:outline-none focus:ring-2 focus:ring-cyan-400 focus:border-transparent transition duration-300 backdrop-blur-xl cursor-pointer hover:bg-white/10"
               >
-                {currentProfiles.map((v) => (
-                  <option key={v} value={v}>
-                    ♪ {v}
-                  </option>
-                ))}
+                {language === "ur"
+                  ? urduProfiles.map((v) => (
+                      <option key={v.name} value={v.name}>♪ {v.name}</option>
+                    ))
+                  : edgeVoices.map((v) => (
+                      <option key={v.name} value={v.name}>
+                        {v.gender === "Female" ? "♀" : "♂"} {v.shortName}
+                      </option>
+                    ))
+                }
               </select>
             </div>
           </div>
 
-          {/* Right Column - Audio Controls */}
           <div className="group bg-gradient-to-br from-purple-500/10 to-blue-600/10 border border-purple-400/20 hover:border-purple-400/50 rounded-3xl p-8 backdrop-blur-2xl transition duration-500 hover:shadow-2xl hover:shadow-purple-500/20">
             <h3 className="text-lg font-bold mb-6 flex items-center gap-3 text-purple-300 uppercase tracking-wide">
               <div className="p-2 rounded-lg bg-purple-500/20">
@@ -232,7 +212,6 @@ export default function Voiceover() {
             </h3>
 
             <div className="grid grid-cols-2 gap-4">
-              {/* Rate */}
               <div>
                 <label className="text-xs font-bold mb-2.5 text-purple-200/70 block uppercase tracking-widest">
                   Rate
@@ -245,7 +224,6 @@ export default function Voiceover() {
                 />
               </div>
 
-              {/* Speed */}
               <div>
                 <label className="text-xs font-bold mb-2.5 text-purple-200/70 block uppercase tracking-widest">
                   Speed
@@ -259,7 +237,6 @@ export default function Voiceover() {
                 />
               </div>
 
-              {/* Volume */}
               <div>
                 <label className="text-xs font-bold mb-2.5 text-purple-200/70 block uppercase tracking-widest">
                   Volume
@@ -273,7 +250,6 @@ export default function Voiceover() {
                 />
               </div>
 
-              {/* Pitch */}
               <div>
                 <label className="text-xs font-bold mb-2.5 text-purple-200/70 block uppercase tracking-widest">
                   Pitch
@@ -289,7 +265,6 @@ export default function Voiceover() {
           </div>
         </div>
 
-        {/* Action Buttons */}
         <div className="flex flex-col sm:flex-row gap-4 mb-6">
           <button
             onClick={handleGenerate}
@@ -300,9 +275,7 @@ export default function Voiceover() {
             <div className="relative flex items-center gap-3">
               {isGenerating ? (
                 <>
-                  <div className="animate-spin">
-                    <Mic2 size={22} />
-                  </div>
+                  <div className="animate-spin"><Mic2 size={22} /></div>
                   Generating...
                 </>
               ) : (
@@ -335,14 +308,12 @@ export default function Voiceover() {
           )}
         </div>
 
-        {/* Error Message */}
         {error && (
           <p className="text-red-400 mt-3 mb-3 text-center font-medium bg-red-500/10 border border-red-500/30 rounded-xl py-3 px-4">
             ❌ {error}
           </p>
         )}
 
-        {/* Audio Player */}
         {audioUrl && (
           <div className="mt-6 mb-6 p-6 rounded-2xl bg-white/5 border border-cyan-400/20">
             <p className="text-cyan-300 mb-3 font-bold">✅ Audio Ready!</p>
@@ -350,7 +321,6 @@ export default function Voiceover() {
           </div>
         )}
 
-        {/* Info Footer */}
         <div className="bg-gradient-to-r from-cyan-500/10 to-purple-500/10 border border-white/10 rounded-2xl p-6 backdrop-blur-xl text-center">
           <p className="text-cyan-100/60 text-sm font-light">
             ✨ Powered by Advanced AI Voice Generation Technology
