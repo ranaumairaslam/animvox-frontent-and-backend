@@ -91,7 +91,7 @@ export default function HeroSection() {
           className="mt-10"
         >
           <Link
-            href="/signup"
+            href="/login"
             className="px-10 py-4 rounded-full bg-[#22B2C1] text-black font-bold text-sm 
                        hover:shadow-[0_0_40px_rgba(34,178,193,0.7)] transition font-unbounded"
           >

@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef } from "react";
+import API from "@/lib/api";
 import { useRouter } from "next/navigation";
-import { ArrowRight, Mic2, Volume2, Zap, Music, Settings, Play, Download } from "lucide-react";
+import { Mic2, Volume2, Music, Settings, Play, Download } from "lucide-react";
 
 // Urdu voice profiles
 const URDU_PROFILES = [
@@ -20,6 +21,12 @@ const URDU_PROFILES = [
   "Angry",
 ];
 
+// English voice options (male/female for pyttsx3)
+const ENGLISH_PROFILES = [
+  "male",
+  "female",
+];
+
 export default function Voiceover() {
   const router = useRouter();
   const [text, setText] = useState("");
@@ -30,11 +37,88 @@ export default function Voiceover() {
   const [volume, setVolume] = useState(1.0);
   const [pitch, setPitch] = useState(0);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [audioUrl, setAudioUrl] = useState(null);
+  const [audioId, setAudioId] = useState(null);
+  const [error, setError] = useState("");
+  const audioRef = useRef(null);
 
-  const handleGenerate = () => {
-    setIsGenerating(true);
-    setTimeout(() => setIsGenerating(false), 2000);
+  // Jab language change ho, voice reset karo
+  const handleLanguageChange = (newLang) => {
+    setLanguage(newLang);
+    if (newLang === "ur") {
+      setVoice(URDU_PROFILES[0]);
+    } else {
+      setVoice(ENGLISH_PROFILES[0]);
+    }
   };
+
+  const handleGenerate = async () => {
+    if (!text.trim()) return;
+    setIsGenerating(true);
+    setError("");
+    setAudioUrl(null);
+
+    const userId = localStorage.getItem("user_id");
+
+    try {
+      const res = await API.generateVoiceover({
+        text,
+        language,
+        voice,
+        rate: Number(rate),
+        speed: Number(speed),
+        volume: Number(volume),
+        pitch: Number(pitch),
+        user_id: userId,
+      });
+
+      const newAudioId = res.data.audio_id;
+      setAudioId(newAudioId);
+
+      const interval = setInterval(async () => {
+        try {
+          const prog = await API.getAudioProgress(newAudioId);
+          const progress = prog.data.progress;
+
+          // Error state handle karo (-1 matlab generation fail)
+          if (progress === -1) {
+            clearInterval(interval);
+            setIsGenerating(false);
+            setError("Audio generation failed. Please try again.");
+            return;
+          }
+
+          // Success state
+          if (progress >= 100) {
+            clearInterval(interval);
+            setIsGenerating(false);
+            try {
+              const blob = await API.downloadPublicVoiceover(newAudioId, userId);
+              const url = URL.createObjectURL(blob.data);
+              setAudioUrl(url);
+            } catch (downloadErr) {
+              setError("Audio ready but download failed. Please refresh.");
+            }
+          }
+        } catch (pollErr) {
+          clearInterval(interval);
+          setIsGenerating(false);
+          setError("Connection error. Please try again.");
+        }
+      }, 2000);
+
+    } catch (genErr) {
+      setIsGenerating(false);
+      // Plan limit error handle karo
+      if (genErr?.response?.status === 403) {
+        setError(genErr.response.data?.error || "Plan limit reached.");
+      } else {
+        setError("Generation failed. Please try again.");
+      }
+    }
+  };
+
+  const currentProfiles = language === "ur" ? URDU_PROFILES : ENGLISH_PROFILES;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 md:p-12 font-sans overflow-hidden relative">
@@ -67,7 +151,9 @@ export default function Voiceover() {
               <h1 className="text-5xl md:text-7xl font-black bg-gradient-to-r from-cyan-300 via-blue-300 to-purple-400 bg-clip-text text-transparent animate-pulse">
                 Voiceover Studio
               </h1>
-              <p className="text-cyan-200/70 text-sm md:text-base mt-2 font-light tracking-wider">Next-Generation AI Voice Generation</p>
+              <p className="text-cyan-200/70 text-sm md:text-base mt-2 font-light tracking-wider">
+                Next-Generation AI Voice Generation
+              </p>
             </div>
           </div>
         </div>
@@ -84,7 +170,9 @@ export default function Voiceover() {
             className="w-full min-h-[160px] md:min-h-[200px] p-6 rounded-2xl bg-white/5 backdrop-blur-xl border-2 border-cyan-400/20 hover:border-cyan-400/40 text-white text-base md:text-lg placeholder:text-cyan-100/30 focus:outline-none focus:ring-2 focus:ring-cyan-400 focus:border-cyan-400/80 transition duration-300 resize-none shadow-2xl hover:shadow-cyan-500/20"
           />
           <div className="flex justify-between items-center mt-3 px-2">
-            <p className="text-xs text-cyan-100/40 font-light">Customize your voice settings and generate professional audio</p>
+            <p className="text-xs text-cyan-100/40 font-light">
+              Customize your voice settings and generate professional audio
+            </p>
             <span className="text-xs text-cyan-300/60 font-mono">{text.length} characters</span>
           </div>
         </div>
@@ -107,7 +195,7 @@ export default function Voiceover() {
               </label>
               <select
                 value={language}
-                onChange={(e) => setLanguage(e.target.value)}
+                onChange={(e) => handleLanguageChange(e.target.value)}
                 className="w-full rounded-xl bg-white/5 border-2 border-cyan-400/20 hover:border-cyan-400/40 p-4 text-white text-sm font-medium focus:outline-none focus:ring-2 focus:ring-cyan-400 focus:border-transparent transition duration-300 backdrop-blur-xl cursor-pointer hover:bg-white/10"
               >
                 <option value="en">🇺🇸 English</option>
@@ -115,7 +203,7 @@ export default function Voiceover() {
               </select>
             </div>
 
-            {/* Voice */}
+            {/* Voice Profile */}
             <div>
               <label className="text-xs font-bold mb-3 text-cyan-200/80 block uppercase tracking-widest">
                 Voice Profile
@@ -125,7 +213,7 @@ export default function Voiceover() {
                 onChange={(e) => setVoice(e.target.value)}
                 className="w-full rounded-xl bg-white/5 border-2 border-cyan-400/20 hover:border-cyan-400/40 p-4 text-white text-sm font-medium focus:outline-none focus:ring-2 focus:ring-cyan-400 focus:border-transparent transition duration-300 backdrop-blur-xl cursor-pointer hover:bg-white/10"
               >
-                {URDU_PROFILES.map((v) => (
+                {currentProfiles.map((v) => (
                   <option key={v} value={v}>
                     ♪ {v}
                   </option>
@@ -146,7 +234,9 @@ export default function Voiceover() {
             <div className="grid grid-cols-2 gap-4">
               {/* Rate */}
               <div>
-                <label className="text-xs font-bold mb-2.5 text-purple-200/70 block uppercase tracking-widest">Rate</label>
+                <label className="text-xs font-bold mb-2.5 text-purple-200/70 block uppercase tracking-widest">
+                  Rate
+                </label>
                 <input
                   type="number"
                   value={rate}
@@ -157,7 +247,9 @@ export default function Voiceover() {
 
               {/* Speed */}
               <div>
-                <label className="text-xs font-bold mb-2.5 text-purple-200/70 block uppercase tracking-widest">Speed</label>
+                <label className="text-xs font-bold mb-2.5 text-purple-200/70 block uppercase tracking-widest">
+                  Speed
+                </label>
                 <input
                   type="number"
                   step="0.1"
@@ -169,7 +261,9 @@ export default function Voiceover() {
 
               {/* Volume */}
               <div>
-                <label className="text-xs font-bold mb-2.5 text-purple-200/70 block uppercase tracking-widest">Volume</label>
+                <label className="text-xs font-bold mb-2.5 text-purple-200/70 block uppercase tracking-widest">
+                  Volume
+                </label>
                 <input
                   type="number"
                   step="0.1"
@@ -181,7 +275,9 @@ export default function Voiceover() {
 
               {/* Pitch */}
               <div>
-                <label className="text-xs font-bold mb-2.5 text-purple-200/70 block uppercase tracking-widest">Pitch</label>
+                <label className="text-xs font-bold mb-2.5 text-purple-200/70 block uppercase tracking-widest">
+                  Pitch
+                </label>
                 <input
                   type="number"
                   value={pitch}
@@ -218,16 +314,41 @@ export default function Voiceover() {
             </div>
           </button>
 
-          <button className="flex-1 sm:flex-none px-8 py-4 bg-white/5 border-2 border-purple-400/30 hover:border-purple-400/60 hover:bg-purple-500/10 rounded-xl font-bold flex items-center justify-center gap-3 transition duration-300 backdrop-blur-xl shadow-lg hover:shadow-purple-500/30 text-white uppercase tracking-wider group">
+          <button
+            onClick={() => audioRef.current?.play()}
+            disabled={!audioUrl}
+            className="flex-1 sm:flex-none px-8 py-4 bg-white/5 border-2 border-purple-400/30 hover:border-purple-400/60 hover:bg-purple-500/10 rounded-xl font-bold flex items-center justify-center gap-3 transition duration-300 backdrop-blur-xl shadow-lg hover:shadow-purple-500/30 text-white uppercase tracking-wider group disabled:opacity-40 disabled:cursor-not-allowed"
+          >
             <Play size={20} className="group-hover:scale-110 transition duration-300" />
             Preview
           </button>
 
-          <button className="flex-1 sm:flex-none px-8 py-4 bg-white/5 border-2 border-emerald-400/30 hover:border-emerald-400/60 hover:bg-emerald-500/10 rounded-xl font-bold flex items-center justify-center gap-3 transition duration-300 backdrop-blur-xl shadow-lg hover:shadow-emerald-500/30 text-white uppercase tracking-wider group">
-            <Download size={20} className="group-hover:scale-110 transition duration-300" />
-            Download
-          </button>
+          {audioUrl && (
+            <a
+              href={audioUrl}
+              download="voiceover.mp3"
+              className="flex-1 sm:flex-none px-8 py-4 bg-white/5 border-2 border-emerald-400/30 hover:border-emerald-400/60 hover:bg-emerald-500/10 rounded-xl font-bold flex items-center justify-center gap-3 transition duration-300 backdrop-blur-xl shadow-lg hover:shadow-emerald-500/30 text-white uppercase tracking-wider group"
+            >
+              <Download size={20} className="group-hover:scale-110 transition duration-300" />
+              Download
+            </a>
+          )}
         </div>
+
+        {/* Error Message */}
+        {error && (
+          <p className="text-red-400 mt-3 mb-3 text-center font-medium bg-red-500/10 border border-red-500/30 rounded-xl py-3 px-4">
+            ❌ {error}
+          </p>
+        )}
+
+        {/* Audio Player */}
+        {audioUrl && (
+          <div className="mt-6 mb-6 p-6 rounded-2xl bg-white/5 border border-cyan-400/20">
+            <p className="text-cyan-300 mb-3 font-bold">✅ Audio Ready!</p>
+            <audio ref={audioRef} controls src={audioUrl} className="w-full" />
+          </div>
+        )}
 
         {/* Info Footer */}
         <div className="bg-gradient-to-r from-cyan-500/10 to-purple-500/10 border border-white/10 rounded-2xl p-6 backdrop-blur-xl text-center">

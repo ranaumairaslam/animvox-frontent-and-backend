@@ -3,7 +3,9 @@
 
 "use client";
 
+//import { useState } from "react";
 import { useState } from "react";
+import API from "@/lib/api";
 import { Video, Plus, Trash2, Upload, Sparkles, Settings, Download, Zap } from "lucide-react";
 
 export default function AnimatedVideoTool() {
@@ -23,20 +25,57 @@ export default function AnimatedVideoTool() {
   const removeScene = (idx) =>
     setStory({ scenes: story.scenes.filter((_, i) => i !== idx) });
 
-  const handleGenerate = () => {
-    setIsGenerating(true);
-    let currentProgress = 0;
-    const interval = setInterval(() => {
-      currentProgress += Math.random() * 30;
-      if (currentProgress >= 100) {
-        setProgress(100);
+  const [videoUrl, setVideoUrl] = useState(null);
+const [videoId, setVideoId] = useState(null);
+const [error, setError] = useState("");
+
+const handleGenerate = async () => {
+  setIsGenerating(true);
+  setProgress(0);
+  setError("");
+  setVideoUrl(null);
+  const userId = localStorage.getItem("user_id");
+  const formData = new FormData();
+  formData.append("user_id", userId);
+
+  story.scenes.forEach((scene, idx) => {
+    formData.append(`scenes[${idx}][dialogue]`, scene.dialogue || "");
+    if (scene.background) {
+      formData.append(`scenes[${idx}][background]`, scene.background);
+    }
+    if (scene.characters) {
+      Array.from(scene.characters).forEach((file) => {
+        formData.append(`scenes[${idx}][characters]`, file);
+      });
+    }
+  });
+
+  try {
+    const res = await API.generateAnimatedVideo(formData, voice, language);
+    const newVideoId = res.data.video_id;
+    setVideoId(newVideoId);
+    const interval = setInterval(async () => {
+      try {
+        const prog = await API.getAnimatedVideoProgress(newVideoId);
+        const p = prog.data.progress || 0;
+        setProgress(p);
+        if (p >= 100 || prog.data.status === "done") {
+          clearInterval(interval);
+          setIsGenerating(false);
+          const blob = await API.downloadAnimatedVideo(newVideoId, userId);
+          const url = URL.createObjectURL(blob.data);
+          setVideoUrl(url);
+        }
+      } catch {
         clearInterval(interval);
         setIsGenerating(false);
-      } else {
-        setProgress(currentProgress);
       }
-    }, 500);
-  };
+    }, 3000);
+  } catch {
+    setIsGenerating(false);
+    setError("Animation failed. Try again.");
+  }
+};
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 md:p-12 font-sans overflow-hidden relative">
@@ -156,9 +195,14 @@ export default function AnimatedVideoTool() {
                   Dialogue / Narration
                 </label>
                 <textarea
-                  defaultValue={scene.dialogue}
-                  placeholder="Enter the dialogue or narration for this scene..."
-                  className="w-full min-h-[100px] p-4 rounded-xl bg-white/5 border-2 border-emerald-400/20 hover:border-emerald-400/40 text-white text-sm font-medium placeholder:text-emerald-100/30 focus:outline-none focus:ring-2 focus:ring-emerald-400 focus:border-transparent transition duration-300 backdrop-blur-xl resize-none hover:bg-white/10"
+                value={scene.dialogue}
+                onChange={(e) => {
+                  const updated = [...story.scenes];
+                  updated[idx] = { ...updated[idx], dialogue: e.target.value };
+                  setStory({ scenes: updated });
+                }}
+                placeholder="Enter the dialogue or narration for this scene..."
+                className="w-full min-h-[100px] p-4 rounded-xl bg-white/5 border-2 border-emerald-400/20 hover:border-emerald-400/40 text-white text-sm font-medium placeholder:text-emerald-100/30 focus:outline-none focus:ring-2 focus:ring-emerald-400 focus:border-transparent transition duration-300 backdrop-blur-xl resize-none hover:bg-white/10"
                 />
               </div>
 
@@ -168,9 +212,14 @@ export default function AnimatedVideoTool() {
                   <Upload size={16} /> Background Image
                 </label>
                 <input
-                  type="file"
-                  accept="image/*"
-                  className="w-full text-white text-sm p-4 bg-white/5 border-2 border-dashed border-emerald-400/30 hover:border-emerald-400/60 rounded-xl transition duration-300 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-emerald-500/20 file:text-emerald-200 hover:file:bg-emerald-500/30"
+                type="file"
+                accept="image/*"
+                onChange={(e) => {
+                  const updated = [...story.scenes];
+                  updated[idx] = { ...updated[idx], background: e.target.files[0] };
+                  setStory({ scenes: updated });
+                }}
+                className="w-full text-white text-sm p-4 bg-white/5 border-2 border-dashed border-emerald-400/30 hover:border-emerald-400/60 rounded-xl transition duration-300 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-emerald-500/20 file:text-emerald-200 hover:file:bg-emerald-500/30"
                 />
               </div>
 
@@ -180,10 +229,15 @@ export default function AnimatedVideoTool() {
                   <Upload size={16} /> Character Images
                 </label>
                 <input
-                  type="file"
-                  multiple
-                  accept="image/*"
-                  className="w-full text-white text-sm p-4 bg-white/5 border-2 border-dashed border-emerald-400/30 hover:border-emerald-400/60 rounded-xl transition duration-300 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-emerald-500/20 file:text-emerald-200 hover:file:bg-emerald-500/30"
+                type="file"
+                multiple
+                accept="image/*"
+                onChange={(e) => {
+                  const updated = [...story.scenes];
+                  updated[idx] = { ...updated[idx], characters: e.target.files };
+                  setStory({ scenes: updated });
+                }}
+                className="w-full text-white text-sm p-4 bg-white/5 border-2 border-dashed border-emerald-400/30 hover:border-emerald-400/60 rounded-xl transition duration-300 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-emerald-500/20 file:text-emerald-200 hover:file:bg-emerald-500/30"
                 />
               </div>
             </div>
@@ -240,26 +294,32 @@ export default function AnimatedVideoTool() {
         )}
 
         {/* Video Preview Section */}
-        {progress === 100 && (
-          <div className="bg-gradient-to-br from-slate-900/80 to-slate-800/80 border border-white/10 rounded-3xl p-8 backdrop-blur-xl">
-            <h3 className="text-lg font-bold mb-6 flex items-center gap-3 text-emerald-300 uppercase tracking-wide">
-              <Sparkles size={20} />
-              Generated Animation
-            </h3>
+        {/* Video Preview Section */}
+{progress === 100 && videoUrl && (
+  <div className="bg-gradient-to-br from-slate-900/80 to-slate-800/80 border border-white/10 rounded-3xl p-8 backdrop-blur-xl">
+    <h3 className="text-lg font-bold mb-6 flex items-center gap-3 text-emerald-300 uppercase tracking-wide">
+      <Sparkles size={20} />
+      Generated Animation
+    </h3>
 
-            <div className="w-full mb-6 bg-black rounded-2xl overflow-hidden border border-white/10">
-              <video
-                controls
-                className="w-full aspect-video bg-black"
-              />
-            </div>
+    <div className="w-full mb-6 bg-black rounded-2xl overflow-hidden border border-white/10">
+      <video
+        controls
+        src={videoUrl}
+        className="w-full aspect-video bg-black"
+      />
+    </div>
 
-            <button className="w-full px-8 py-4 bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 rounded-xl font-bold flex items-center justify-center gap-3 transition duration-300 transform hover:scale-105 shadow-2xl hover:shadow-cyan-500/50 text-white uppercase tracking-wider">
-              <Zap size={20} />
-              Download Animation
-            </button>
-          </div>
-        )}
+    <a
+      href={videoUrl}
+      download="animated_video.mp4"
+      className="w-full px-8 py-4 bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 rounded-xl font-bold flex items-center justify-center gap-3 transition duration-300 transform hover:scale-105 shadow-2xl hover:shadow-cyan-500/50 text-white uppercase tracking-wider"
+    >
+      <Zap size={20} />
+      Download Animation
+    </a>
+  </div>
+)}
       </div>
     </div>
   );
