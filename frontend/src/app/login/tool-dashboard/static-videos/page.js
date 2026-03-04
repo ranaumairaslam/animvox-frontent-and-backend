@@ -11,7 +11,6 @@ export default function StaticVideoTool() {
   const [progress, setProgress] = useState(0);
   const [isGenerating, setIsGenerating] = useState(false);
 
-  // Global settings state (were unconnected before - now properly wired)
   const [language, setLanguage] = useState("en");
   const [voice, setVoice] = useState("male");
   const [ttsRate, setTtsRate] = useState(100);
@@ -36,7 +35,6 @@ export default function StaticVideoTool() {
     const userId = localStorage.getItem("user_id");
     const formData = new FormData();
     formData.append("user_id", userId);
-    // Now sending all global settings to backend
     formData.append("language", language);
     formData.append("voice", voice);
     formData.append("tts_rate", ttsRate);
@@ -86,8 +84,24 @@ export default function StaticVideoTool() {
     }
   };
 
+  // Shared styles — solid bg-slate-800 ensures dropdown option text is always visible
+  const selectClass =
+    "w-full rounded-xl bg-slate-800 border-2 border-violet-400/20 hover:border-violet-400/40 p-4 text-white text-sm font-medium focus:outline-none focus:ring-2 focus:ring-violet-400 focus:border-transparent transition duration-300 cursor-pointer hover:bg-slate-700 appearance-none";
+
+  const inputClass =
+    "w-full rounded-xl bg-slate-800 border-2 border-violet-400/20 hover:border-violet-400/40 p-4 text-white text-sm font-medium focus:outline-none focus:ring-2 focus:ring-violet-400 focus:border-transparent transition duration-300 hover:bg-slate-700";
+
+  const chevronDown = (
+    <div className="pointer-events-none absolute inset-y-0 right-4 flex items-center text-violet-400">
+      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+      </svg>
+    </div>
+  );
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white p-4 md:p-12 font-sans overflow-hidden relative">
+      {/* Background blobs */}
       <div className="fixed inset-0 overflow-hidden pointer-events-none">
         <div className="absolute top-0 right-1/4 w-96 h-96 bg-violet-500/10 rounded-full blur-3xl animate-pulse" />
         <div className="absolute bottom-0 left-1/4 w-96 h-96 bg-blue-500/10 rounded-full blur-3xl animate-pulse delay-1000" />
@@ -95,6 +109,7 @@ export default function StaticVideoTool() {
       </div>
 
       <div className="relative z-10">
+        {/* Back button */}
         <a
           href="./"
           className="mb-8 inline-flex items-center gap-2 px-4 py-2 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 hover:border-violet-400/50 text-blue-100 transition duration-300 backdrop-blur-sm group"
@@ -102,6 +117,7 @@ export default function StaticVideoTool() {
           <span className="group-hover:-translate-x-1 transition duration-300">←</span> Back to Dashboard
         </a>
 
+        {/* Header */}
         <div className="mb-16">
           <div className="flex items-center gap-4 mb-6">
             <div className="p-4 rounded-2xl bg-gradient-to-br from-violet-500/30 to-pink-600/30 border border-violet-400/30 backdrop-blur-xl hover:from-violet-500/50 hover:to-pink-600/50 transition duration-300">
@@ -110,10 +126,12 @@ export default function StaticVideoTool() {
               </div>
             </div>
             <div>
-              <h1 className="text-5xl md:text-7xl font-black bg-gradient-to-r from-violet-300 via-pink-300 to-rose-400 bg-clip-text text-transparent animate-pulse">
+              <h1 className="text-5xl md:text-7xl font-black bg-gradient-to-r from-violet-300 via-pink-300 to-rose-400 bg-clip-text text-transparent">
                 Static Video Studio
               </h1>
-              <p className="text-violet-200/70 text-sm md:text-base mt-2 font-light tracking-wider">Create dynamic videos with images and voiceover</p>
+              <p className="text-violet-200/70 text-sm md:text-base mt-2 font-light tracking-wider">
+                Create dynamic videos with images and voiceover
+              </p>
             </div>
           </div>
         </div>
@@ -129,73 +147,96 @@ export default function StaticVideoTool() {
             </h3>
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              {/* Language */}
               <div>
-                <label className="text-xs font-bold mb-3 text-violet-200/80 block uppercase tracking-widest">Language</label>
-                <select
-                  value={language}
-                  onChange={(e) => setLanguage(e.target.value)}
-                  className="w-full rounded-xl bg-white/5 border-2 border-violet-400/20 hover:border-violet-400/40 p-4 text-white text-sm font-medium focus:outline-none focus:ring-2 focus:ring-violet-400 focus:border-transparent transition duration-300 backdrop-blur-xl cursor-pointer hover:bg-white/10"
-                >
-                  <option value="en">🇺🇸 English</option>
-                  <option value="ur">🇵🇰 Urdu</option>
-                </select>
+                <label className="text-xs font-bold mb-3 text-violet-200/80 block uppercase tracking-widest">
+                  Language
+                </label>
+                <div className="relative">
+                  <select
+                    value={language}
+                    onChange={(e) => setLanguage(e.target.value)}
+                    className={selectClass}
+                  >
+                    <option value="en" className="bg-slate-800 text-white">🇺🇸 English</option>
+                    <option value="ur" className="bg-slate-800 text-white">🇵🇰 Urdu</option>
+                  </select>
+                  {chevronDown}
+                </div>
               </div>
 
+              {/* Voice Type */}
               <div>
-                <label className="text-xs font-bold mb-3 text-violet-200/80 block uppercase tracking-widest">Voice Type</label>
-                <select
-                  value={voice}
-                  onChange={(e) => setVoice(e.target.value)}
-                  className="w-full rounded-xl bg-white/5 border-2 border-violet-400/20 hover:border-violet-400/40 p-4 text-white text-sm font-medium focus:outline-none focus:ring-2 focus:ring-violet-400 focus:border-transparent transition duration-300 backdrop-blur-xl cursor-pointer hover:bg-white/10"
-                >
-                  <option value="male">♂ Male</option>
-                  <option value="female">♀ Female</option>
-                  <option value="narrator">📢 Narrator</option>
-                </select>
+                <label className="text-xs font-bold mb-3 text-violet-200/80 block uppercase tracking-widest">
+                  Voice Type
+                </label>
+                <div className="relative">
+                  <select
+                    value={voice}
+                    onChange={(e) => setVoice(e.target.value)}
+                    className={selectClass}
+                  >
+                    <option value="male" className="bg-slate-800 text-white">♂ Male</option>
+                    <option value="female" className="bg-slate-800 text-white">♀ Female</option>
+                    <option value="narrator" className="bg-slate-800 text-white">📢 Narrator</option>
+                  </select>
+                  {chevronDown}
+                </div>
               </div>
 
+              {/* TTS Rate */}
               <div>
-                <label className="text-xs font-bold mb-3 text-violet-200/80 block uppercase tracking-widest">TTS Rate (80-120)</label>
+                <label className="text-xs font-bold mb-3 text-violet-200/80 block uppercase tracking-widest">
+                  TTS Rate (80–120)
+                </label>
                 <input
                   type="number"
                   min="80"
                   max="120"
                   value={ttsRate}
                   onChange={(e) => setTtsRate(e.target.value)}
-                  className="w-full rounded-xl bg-white/5 border-2 border-violet-400/20 hover:border-violet-400/40 p-4 text-white text-sm font-medium focus:outline-none focus:ring-2 focus:ring-violet-400 focus:border-transparent transition duration-300 backdrop-blur-xl hover:bg-white/10"
+                  className={inputClass}
                 />
               </div>
 
+              {/* Pitch */}
               <div>
-                <label className="text-xs font-bold mb-3 text-violet-200/80 block uppercase tracking-widest">Pitch</label>
+                <label className="text-xs font-bold mb-3 text-violet-200/80 block uppercase tracking-widest">
+                  Pitch
+                </label>
                 <input
                   type="number"
                   step="0.1"
                   value={pitch}
                   onChange={(e) => setPitch(e.target.value)}
-                  className="w-full rounded-xl bg-white/5 border-2 border-violet-400/20 hover:border-violet-400/40 p-4 text-white text-sm font-medium focus:outline-none focus:ring-2 focus:ring-violet-400 focus:border-transparent transition duration-300 backdrop-blur-xl hover:bg-white/10"
+                  className={inputClass}
                 />
               </div>
 
+              {/* Speed */}
               <div>
-                <label className="text-xs font-bold mb-3 text-violet-200/80 block uppercase tracking-widest">Speed</label>
+                <label className="text-xs font-bold mb-3 text-violet-200/80 block uppercase tracking-widest">
+                  Speed
+                </label>
                 <input
                   type="number"
                   step="0.1"
                   value={speed}
                   onChange={(e) => setSpeed(e.target.value)}
-                  className="w-full rounded-xl bg-white/5 border-2 border-violet-400/20 hover:border-violet-400/40 p-4 text-white text-sm font-medium focus:outline-none focus:ring-2 focus:ring-violet-400 focus:border-transparent transition duration-300 backdrop-blur-xl hover:bg-white/10"
+                  className={inputClass}
                 />
               </div>
             </div>
           </div>
         </div>
 
+        {/* Scenes Header */}
         <h2 className="text-2xl md:text-3xl font-bold mb-6 flex items-center gap-3 text-white">
           <Film size={28} className="text-violet-400" />
           Video Scenes
         </h2>
 
+        {/* Scenes List */}
         <div className="space-y-4 mb-8">
           {scenes.map((scene, idx) => (
             <div
@@ -219,6 +260,7 @@ export default function StaticVideoTool() {
                 )}
               </div>
 
+              {/* Dialogue */}
               <div className="mb-6">
                 <label className="text-xs font-bold mb-3 text-violet-200/80 block uppercase tracking-widest">
                   Dialogue / Narration
@@ -231,12 +273,13 @@ export default function StaticVideoTool() {
                     setScenes(updated);
                   }}
                   placeholder="Enter the dialogue or narration for this scene..."
-                  className="w-full min-h-[100px] p-4 rounded-xl bg-white/5 border-2 border-violet-400/20 hover:border-violet-400/40 text-white text-sm font-medium placeholder:text-violet-100/30 focus:outline-none focus:ring-2 focus:ring-violet-400 focus:border-transparent transition duration-300 backdrop-blur-xl resize-none hover:bg-white/10"
+                  className="w-full min-h-[100px] p-4 rounded-xl bg-slate-800 border-2 border-violet-400/20 hover:border-violet-400/40 text-white text-sm font-medium placeholder:text-violet-100/30 focus:outline-none focus:ring-2 focus:ring-violet-400 focus:border-transparent transition duration-300 resize-none hover:bg-slate-700"
                 />
               </div>
 
+              {/* Image Upload */}
               <div>
-                <label className="text-xs font-bold mb-3 text-violet-200/80 block uppercase tracking-widest flex items-center gap-2">
+                <label className="text-xs font-bold mb-3 text-violet-200/80 flex items-center gap-2 uppercase tracking-widest">
                   <Upload size={16} /> Upload Images
                 </label>
                 <input
@@ -248,13 +291,20 @@ export default function StaticVideoTool() {
                     updated[idx] = { ...updated[idx], images: e.target.files };
                     setScenes(updated);
                   }}
-                  className="w-full text-white text-sm p-4 bg-white/5 border-2 border-dashed border-violet-400/30 hover:border-violet-400/60 rounded-xl transition duration-300 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-violet-500/20 file:text-violet-200 hover:file:bg-violet-500/30"
+                  className="w-full text-white text-sm p-4 bg-slate-800 border-2 border-dashed border-violet-400/30 hover:border-violet-400/60 rounded-xl transition duration-300 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-violet-500/20 file:text-violet-200 hover:file:bg-violet-500/30 cursor-pointer"
                 />
+                {/* Show selected file names */}
+                {scene.images && scene.images.length > 0 && (
+                  <p className="text-xs text-violet-300/60 mt-2">
+                    {scene.images.length} file{scene.images.length > 1 ? "s" : ""} selected
+                  </p>
+                )}
               </div>
             </div>
           ))}
         </div>
 
+        {/* Add Scene */}
         <button
           onClick={addScene}
           className="mb-10 px-8 py-4 bg-gradient-to-r from-violet-500/20 to-pink-500/20 border-2 border-violet-400/40 hover:border-violet-400/80 hover:from-violet-500/30 hover:to-pink-500/30 rounded-xl font-bold flex items-center gap-3 transition duration-300 backdrop-blur-xl text-violet-300 hover:text-violet-200 uppercase tracking-wider"
@@ -263,10 +313,14 @@ export default function StaticVideoTool() {
           Add New Scene
         </button>
 
+        {/* Error */}
         {error && (
-          <p className="text-red-400 mb-4 text-center font-medium">{error}</p>
+          <p className="text-red-400 mb-4 text-center font-medium bg-red-500/10 border border-red-500/30 rounded-xl py-3 px-4">
+            ❌ {error}
+          </p>
         )}
 
+        {/* Generate Button */}
         <button
           onClick={handleGenerate}
           disabled={isGenerating}
@@ -288,6 +342,7 @@ export default function StaticVideoTool() {
           </div>
         </button>
 
+        {/* Progress Bar */}
         {progress > 0 && (
           <div className="mb-10">
             <div className="flex justify-between items-center mb-3">
@@ -303,6 +358,7 @@ export default function StaticVideoTool() {
           </div>
         )}
 
+        {/* Video Output */}
         {progress === 100 && videoUrl && (
           <div className="bg-gradient-to-br from-slate-900/80 to-slate-800/80 border border-white/10 rounded-3xl p-8 backdrop-blur-xl">
             <h3 className="text-lg font-bold mb-6 flex items-center gap-3 text-violet-300 uppercase tracking-wide">
@@ -322,6 +378,13 @@ export default function StaticVideoTool() {
             </a>
           </div>
         )}
+
+        {/* Footer */}
+        <div className="mt-10 bg-gradient-to-r from-violet-500/10 to-pink-500/10 border border-white/10 rounded-2xl p-6 backdrop-blur-xl text-center">
+          <p className="text-violet-100/60 text-sm font-light">
+            ✨ Powered by Softcenteric
+          </p>
+        </div>
       </div>
     </div>
   );
